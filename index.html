@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>旅行ガイド</title>
+<style>
+  :root { font-family: -apple-system, system-ui, sans-serif; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #f6f3ee; color: #222; }
+  header { padding: 16px; text-align: center; }
+  header h1 { font-size: 1.3rem; margin: 0; }
+  main { padding-bottom: 32px; }
+  .screen { display: none; padding: 16px; max-width: 720px; margin: 0 auto; }
+  .screen.active { display: block; }
+  .big-button {
+    display: block; width: 100%; padding: 20px; margin: 10px 0;
+    font-size: 1.2rem; border: none; border-radius: 12px;
+    background: #2E7D32; color: white; cursor: pointer;
+  }
+  .big-button.secondary { background: #6A1B9A; }
+  .big-button.tertiary { background: #8B5E34; }
+  .back-button {
+    display: inline-block; margin-bottom: 12px; padding: 8px 14px;
+    border: 1px solid #999; border-radius: 8px; background: white; cursor: pointer;
+  }
+  .spot-card {
+    background: white; border-radius: 12px; padding: 14px; margin: 10px 0;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.1); cursor: pointer;
+  }
+  .spot-card h3 { margin: 0 0 4px; }
+  .spot-card .distance { color: #666; font-size: 0.9rem; }
+  .spot-detail img { max-width: 100%; border-radius: 10px; }
+  .kids-note { background: #FFF8E1; border-radius: 8px; padding: 10px; margin-top: 10px; }
+  .error-box { background: #FDECEA; color: #611A15; border-radius: 8px; padding: 12px; }
+  .tag-chip {
+    display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem;
+    color: white; margin-right: 4px;
+  }
+  .tag-filter { display: inline-flex; align-items: center; gap: 4px; margin: 4px 8px 4px 0; }
+  .leaflet-map { height: 70vh; border-radius: 10px; }
+</style>
+</head>
+<body>
+<header><h1>旅行ガイド</h1></header>
+
+<main>
+  <section id="screen-home" class="screen active">
+    <button class="big-button" id="btn-gps">ここはどこ？</button>
+    <button class="big-button secondary" id="btn-map">地図から探す</button>
+    <button class="big-button tertiary" id="btn-list">一覧から探す</button>
+  </section>
+
+  <section id="screen-nearby" class="screen">
+    <button class="back-button" data-back="screen-home">← ホームへ</button>
+    <div id="nearby-content"></div>
+  </section>
+
+  <section id="screen-detail" class="screen">
+    <button class="back-button" data-back="screen-home">← ホームへ</button>
+    <div id="detail-content"></div>
+  </section>
+
+  <section id="screen-list" class="screen">
+    <button class="back-button" data-back="screen-home">← ホームへ</button>
+    <div id="list-content"></div>
+  </section>
+
+  <section id="screen-map" class="screen">
+    <button class="back-button" data-back="screen-home">← ホームへ</button>
+    <div id="map-content"></div>
+  </section>
+</main>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="geo.js"></script>
+<script src="spots.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
