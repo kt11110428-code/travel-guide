@@ -30,6 +30,24 @@ function findSpotById(id) {
   return SPOTS.find((spot) => spot.id === id);
 }
 
+function spotDetailBodyHtml(spot) {
+  const imageHtml = spot.image
+    ? '<img src="' + escapeHtml(spot.image) + '" alt="' + escapeHtml(spot.name) + '">'
+    : "";
+  const kidsNoteHtml = spot.kidsNote
+    ? '<div class="kids-note">🧒 ' + escapeHtml(spot.kidsNote) + "</div>"
+    : "";
+  return (
+    '<div class="spot-detail">' +
+    "<h2>" + escapeHtml(spot.name) + "</h2>" +
+    "<div>" + tagChipsHtml(spot.tags) + "</div>" +
+    imageHtml +
+    "<p>" + escapeHtml(spot.description) + "</p>" +
+    kidsNoteHtml +
+    "</div>"
+  );
+}
+
 function renderSpotDetail(spotId) {
   const spot = findSpotById(spotId);
   const container = document.getElementById("detail-content");
@@ -38,34 +56,22 @@ function renderSpotDetail(spotId) {
     showScreen("screen-detail");
     return;
   }
-  const imageHtml = spot.image
-    ? '<img src="' + escapeHtml(spot.image) + '" alt="' + escapeHtml(spot.name) + '">'
-    : "";
-  const kidsNoteHtml = spot.kidsNote
-    ? '<div class="kids-note">🧒 ' + escapeHtml(spot.kidsNote) + "</div>"
-    : "";
-  container.innerHTML =
-    '<div class="spot-detail">' +
-    "<h2>" + escapeHtml(spot.name) + "</h2>" +
-    "<div>" + tagChipsHtml(spot.tags) + "</div>" +
-    imageHtml +
-    "<p>" + escapeHtml(spot.description) + "</p>" +
-    kidsNoteHtml +
-    "</div>";
+  container.innerHTML = spotDetailBodyHtml(spot);
   showScreen("screen-detail");
 }
 
 let nearbyResultLimit = 5;
 const NEARBY_DISTANCE_LIMIT_KM = 5;
 
+function distanceLabel(distanceKm) {
+  return distanceKm < 1 ? Math.round(distanceKm * 1000) + "m" : distanceKm.toFixed(1) + "km";
+}
+
 function spotCardHtml(spot, distanceKm) {
-  const distanceLabel = distanceKm < 1
-    ? Math.round(distanceKm * 1000) + "m"
-    : distanceKm.toFixed(1) + "km";
   return (
     '<div class="spot-card" data-spot-id="' + escapeHtml(spot.id) + '">' +
     "<h3>" + escapeHtml(spot.name) + "</h3>" +
-    '<div class="distance">現在地から ' + distanceLabel + "</div>" +
+    '<div class="distance">現在地から ' + distanceLabel(distanceKm) + "</div>" +
     "<div>" + tagChipsHtml(spot.tags) + "</div>" +
     "<p>" + escapeHtml(spot.summary) + "</p>" +
     "</div>"
@@ -89,13 +95,16 @@ function renderNearbyResults(lat, lng) {
   const closest = results[0];
   const rest = results.slice(1);
   const restHtml = rest.map((r) => spotCardHtml(r.spot, r.distanceKm)).join("");
+  const limitOptionHtml = (value, label) =>
+    '<option value="' + value + '"' + (nearbyResultLimit === value ? " selected" : "") + ">" + label + "</option>";
   container.innerHTML =
-    '<div class="spot-detail"><h2>いちばん近いスポット</h2></div>' +
-    spotCardHtml(closest.spot, closest.distanceKm) +
+    "<h2>いちばん近いスポット</h2>" +
+    '<div class="distance">現在地から ' + distanceLabel(closest.distanceKm) + "</div>" +
+    spotDetailBodyHtml(closest.spot) +
     '<label>表示件数: <select id="nearby-limit">' +
-    '<option value="3">3件</option>' +
-    '<option value="5" selected>5件</option>' +
-    '<option value="10">10件</option>' +
+    limitOptionHtml(3, "3件") +
+    limitOptionHtml(5, "5件") +
+    limitOptionHtml(10, "10件") +
     "</select></label>" +
     "<h3>近くのスポット</h3>" +
     '<div id="nearby-rest">' + restHtml + "</div>";
@@ -170,7 +179,10 @@ function renderList(activeTags) {
   });
 }
 
-document.getElementById("btn-list").addEventListener("click", () => renderList([]));
+document.getElementById("btn-list").addEventListener("click", () => {
+  showScreen("screen-list");
+  renderList([]);
+});
 
 let mapInstance = null;
 let mapMarkers = [];
@@ -207,6 +219,7 @@ function renderMapMarkers(activeTags) {
 
 function renderMap() {
   tileFallbackTriggered = false;
+  showScreen("screen-map");
   const container = document.getElementById("map-content");
   const tags = allTagsUsed();
   container.innerHTML =
@@ -223,18 +236,23 @@ function renderMap() {
     tileLoadFailed();
     return;
   }
-  if (!mapInstance) {
-    mapInstance = L.map("leaflet-map").setView([35.0, 135.7], 9);
-    const tileLayer = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 18,
-      attribution: "&copy; OpenStreetMap contributors",
-    });
-    tileLayer.on("tileerror", tileLoadFailed);
-    tileLayer.addTo(mapInstance);
-  } else {
-    mapInstance.setView([35.0, 135.7], 9);
+  // 前回のLeafletインスタンスは古い（削除済みの）#leaflet-map要素を参照しているため、
+  // 再入場のたびに作り直す（コンテナをinnerHTMLで再構築しているため）。
+  if (mapInstance) {
+    mapInstance.remove();
+    mapInstance = null;
   }
+  mapInstance = L.map("leaflet-map").setView([35.0, 135.7], 9);
+  const tileLayer = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 18,
+    attribution: "&copy; OpenStreetMap contributors",
+  });
+  let anyTileLoaded = false;
+  tileLayer.on("tileload", () => { anyTileLoaded = true; });
+  tileLayer.on("tileerror", () => { if (!anyTileLoaded) tileLoadFailed(); });
+  tileLayer.addTo(mapInstance);
   renderMapMarkers(mapActiveTags);
+  mapInstance.invalidateSize();
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition((position) => {
       L.marker([position.coords.latitude, position.coords.longitude]).addTo(mapInstance).bindPopup("現在地");
