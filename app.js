@@ -26,8 +26,14 @@ function tagChipsHtml(tags) {
   ).join("");
 }
 
+const dynamicSpotsById = new Map();
+
+function rememberDynamicSpots(spots) {
+  spots.forEach((spot) => dynamicSpotsById.set(spot.id, spot));
+}
+
 function findSpotById(id) {
-  return SPOTS.find((spot) => spot.id === id);
+  return SPOTS.find((spot) => spot.id === id) || dynamicSpotsById.get(id);
 }
 
 function spotDetailBodyHtml(spot) {
@@ -37,13 +43,19 @@ function spotDetailBodyHtml(spot) {
   const kidsNoteHtml = spot.kidsNote
     ? '<div class="kids-note">🧒 ' + escapeHtml(spot.kidsNote) + "</div>"
     : "";
+  const descriptionHtml = spot.description ? "<p>" + escapeHtml(spot.description) + "</p>" : "";
+  const sourceHtml = spot.sourceUrl
+    ? '<p class="source">出典: <a href="' + escapeHtml(spot.sourceUrl) +
+      '" target="_blank" rel="noopener">Wikipedia</a>（CC BY-SA）</p>'
+    : "";
   return (
     '<div class="spot-detail">' +
     "<h2>" + escapeHtml(spot.name) + "</h2>" +
     "<div>" + tagChipsHtml(spot.tags) + "</div>" +
     imageHtml +
-    "<p>" + escapeHtml(spot.description) + "</p>" +
+    descriptionHtml +
     kidsNoteHtml +
+    sourceHtml +
     "</div>"
   );
 }
@@ -218,36 +230,93 @@ function renderMapMarkers(visibleSpots) {
   });
 }
 
-function renderMapSearchResults(spots) {
+function renderMapSearchResults(spots, status) {
   const container = document.getElementById("map-results");
-  container.innerHTML = spots.length === 0
-    ? '<div class="error-box">このエリアには該当するスポットがありません。地図を動かすか、ジャンルのチェックを変えて再検索してください。</div>'
+  const statusHtml = status ? '<div class="map-status">' + escapeHtml(status) + "</div>" : "";
+  const bodyHtml = spots.length === 0
+    ? '<div class="error-box">このエリアには該当するスポットがありません。地図を動かすか、ジャンルのチェックを変えてください。</div>'
     : "<h3>このエリアのスポット " + spots.length + "件</h3>" + spots.map((spot) => spotCardHtml(spot)).join("");
+  container.innerHTML = statusHtml + bodyHtml;
   wireSpotCardClicks(container);
 }
 
-function runMapSearch() {
+let mapDynamicSpots = [];
+let mapStatus = "";
+let mapSearchSeq = 0;
+let mapMoveTimer = null;
+
+function mapFetchJson(url) {
+  return fetch(url).then((response) => {
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    return response.json();
+  });
+}
+
+function currentMapBounds() {
+  const b = mapInstance.getBounds();
+  return { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() };
+}
+
+// 通信なしで、いま保持しているスポットを表示範囲×チェック中のジャンルで絞り込んで描き直す。
+function refreshMapView() {
   if (!mapInstance) return;
   const container = document.getElementById("map-content");
   const checkedTags = [...container.querySelectorAll('#map-tag-filter input:checked')].map((el) => el.value);
-  const b = mapInstance.getBounds();
-  const bounds = { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() };
-  const found = searchSpotsInArea(SPOTS, bounds, checkedTags);
+  const center = mapInstance.getCenter();
+  const all = mergeSpots(SPOTS, mapDynamicSpots);
+  const found = sortSpotsForMap(searchSpotsInArea(all, currentMapBounds(), checkedTags), center.lat, center.lng);
   renderMapMarkers(found);
-  renderMapSearchResults(found);
+  renderMapSearchResults(found, mapStatus);
+}
+
+// 表示範囲の中心付近のスポットをWikipediaから取得して表示し直す。
+function loadMapSpots() {
+  if (!mapInstance) return;
+  const seq = ++mapSearchSeq;
+  const radiusM = wikipediaSearchRadiusM(currentMapBounds());
+  if (radiusM === null) {
+    mapDynamicSpots = [];
+    mapStatus = "もう少し拡大すると、Wikipediaのスポットも検索します。";
+    refreshMapView();
+    return;
+  }
+  const center = mapInstance.getCenter();
+  mapStatus = "Wikipediaからスポットを検索中…";
+  refreshMapView();
+  fetchWikipediaSpots(center.lat, center.lng, radiusM, mapFetchJson).then(
+    (spots) => {
+      if (seq !== mapSearchSeq) return;
+      rememberDynamicSpots(spots);
+      mapDynamicSpots = spots;
+      mapStatus = "";
+      refreshMapView();
+    },
+    () => {
+      if (seq !== mapSearchSeq) return;
+      mapDynamicSpots = [];
+      mapStatus = "Wikipediaのスポットを取得できませんでした。通信状況を確認して「このエリアを再読み込み」を押してください。";
+      refreshMapView();
+    }
+  );
 }
 
 function renderMap() {
   tileFallbackTriggered = false;
   showScreen("screen-map");
   const container = document.getElementById("map-content");
-  const tags = allTagsUsed();
+  const tags = allTagsUsed().filter((tag) => tag !== "その他").concat("その他");
   container.innerHTML =
     '<div id="map-tag-filter">' + tagCheckboxesHtml(tags, tags) + "</div>" +
-    '<button class="research-button" id="map-research">このエリアで再検索</button>' +
+    '<button class="research-button" id="map-research">このエリアを再読み込み</button>' +
     '<div id="leaflet-map" class="leaflet-map"></div>' +
-    '<div id="map-results"></div>';
-  document.getElementById("map-research").addEventListener("click", runMapSearch);
+    '<div id="map-results"></div>' +
+    '<div id="map-attribution" class="map-attribution">スポット情報: ' +
+    '<a href="https://ja.wikipedia.org/" target="_blank" rel="noopener">Wikipedia</a>（CC BY-SA）／' +
+    "地図: OpenStreetMap contributors</div>";
+  document.getElementById("map-research").addEventListener("click", loadMapSpots);
+  container.querySelectorAll('#map-tag-filter input[type="checkbox"]').forEach((checkbox) => {
+    checkbox.addEventListener("change", refreshMapView);
+  });
 
   if (typeof L === "undefined") {
     tileLoadFailed();
@@ -269,7 +338,14 @@ function renderMap() {
   tileLayer.on("tileerror", () => { if (!anyTileLoaded) tileLoadFailed(); });
   tileLayer.addTo(mapInstance);
   mapInstance.invalidateSize();
-  runMapSearch();
+  mapDynamicSpots = [];
+  mapStatus = "";
+  loadMapSpots();
+  // 初期表示の移動で二重に検索しないよう、ここから先の移動だけを監視する。
+  mapInstance.on("moveend", () => {
+    clearTimeout(mapMoveTimer);
+    mapMoveTimer = setTimeout(loadMapSpots, 600);
+  });
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition((position) => {
       L.marker([position.coords.latitude, position.coords.longitude]).addTo(mapInstance).bindPopup("現在地");
