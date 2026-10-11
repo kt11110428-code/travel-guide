@@ -70,3 +70,17 @@ function filterSpotsByTags(spots, activeTags) {
   if (!activeTags || activeTags.length === 0) return spots;
   return spots.filter((spot) => spot.tags.some((tag) => activeTags.includes(tag)));
 }
+
+function filterSpotsByBounds(spots, bounds) {
+  return spots.filter((spot) =>
+    spot.lat >= bounds.south && spot.lat <= bounds.north &&
+    spot.lng >= bounds.west && spot.lng <= bounds.east
+  );
+}
+
+// filterSpotsByTagsと違い、checkedTagsが空なら0件（地図の再検索は「全部チェック」が初期状態のため）。
+function searchSpotsInArea(spots, bounds, checkedTags) {
+  return filterSpotsByBounds(spots, bounds).filter((spot) =>
+    spot.tags.some((tag) => checkedTags.includes(tag))
+  );
+}

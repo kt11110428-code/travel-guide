@@ -68,10 +68,13 @@ function distanceLabel(distanceKm) {
 }
 
 function spotCardHtml(spot, distanceKm) {
+  const distanceHtml = distanceKm === undefined
+    ? ""
+    : '<div class="distance">現在地から ' + distanceLabel(distanceKm) + "</div>";
   return (
     '<div class="spot-card" data-spot-id="' + escapeHtml(spot.id) + '">' +
     "<h3>" + escapeHtml(spot.name) + "</h3>" +
-    '<div class="distance">現在地から ' + distanceLabel(distanceKm) + "</div>" +
+    distanceHtml +
     "<div>" + tagChipsHtml(spot.tags) + "</div>" +
     "<p>" + escapeHtml(spot.summary) + "</p>" +
     "</div>"
@@ -186,7 +189,6 @@ document.getElementById("btn-list").addEventListener("click", () => {
 
 let mapInstance = null;
 let mapMarkers = [];
-let mapActiveTags = [];
 let tileFallbackTriggered = false;
 
 function tileLoadFailed() {
@@ -200,11 +202,10 @@ function tileLoadFailed() {
   );
 }
 
-function renderMapMarkers(activeTags) {
+function renderMapMarkers(visibleSpots) {
   mapMarkers.forEach((marker) => mapInstance.removeLayer(marker));
   mapMarkers = [];
-  const visible = filterSpotsByTags(SPOTS, activeTags);
-  visible.forEach((spot) => {
+  visibleSpots.forEach((spot) => {
     const marker = L.circleMarker([spot.lat, spot.lng], {
       radius: 9,
       color: colorForSpot(spot),
@@ -217,20 +218,36 @@ function renderMapMarkers(activeTags) {
   });
 }
 
+function renderMapSearchResults(spots) {
+  const container = document.getElementById("map-results");
+  container.innerHTML = spots.length === 0
+    ? '<div class="error-box">このエリアには該当するスポットがありません。地図を動かすか、ジャンルのチェックを変えて再検索してください。</div>'
+    : "<h3>このエリアのスポット " + spots.length + "件</h3>" + spots.map((spot) => spotCardHtml(spot)).join("");
+  wireSpotCardClicks(container);
+}
+
+function runMapSearch() {
+  if (!mapInstance) return;
+  const container = document.getElementById("map-content");
+  const checkedTags = [...container.querySelectorAll('#map-tag-filter input:checked')].map((el) => el.value);
+  const b = mapInstance.getBounds();
+  const bounds = { south: b.getSouth(), west: b.getWest(), north: b.getNorth(), east: b.getEast() };
+  const found = searchSpotsInArea(SPOTS, bounds, checkedTags);
+  renderMapMarkers(found);
+  renderMapSearchResults(found);
+}
+
 function renderMap() {
   tileFallbackTriggered = false;
   showScreen("screen-map");
   const container = document.getElementById("map-content");
   const tags = allTagsUsed();
   container.innerHTML =
-    '<div id="map-tag-filter">' + tagCheckboxesHtml(tags, mapActiveTags) + "</div>" +
-    '<div id="leaflet-map" class="leaflet-map"></div>';
-  container.querySelectorAll('#map-tag-filter input[type="checkbox"]').forEach((checkbox) => {
-    checkbox.addEventListener("change", () => {
-      mapActiveTags = [...container.querySelectorAll('#map-tag-filter input:checked')].map((el) => el.value);
-      renderMapMarkers(mapActiveTags);
-    });
-  });
+    '<div id="map-tag-filter">' + tagCheckboxesHtml(tags, tags) + "</div>" +
+    '<button class="research-button" id="map-research">このエリアで再検索</button>' +
+    '<div id="leaflet-map" class="leaflet-map"></div>' +
+    '<div id="map-results"></div>';
+  document.getElementById("map-research").addEventListener("click", runMapSearch);
 
   if (typeof L === "undefined") {
     tileLoadFailed();
@@ -251,8 +268,8 @@ function renderMap() {
   tileLayer.on("tileload", () => { anyTileLoaded = true; });
   tileLayer.on("tileerror", () => { if (!anyTileLoaded) tileLoadFailed(); });
   tileLayer.addTo(mapInstance);
-  renderMapMarkers(mapActiveTags);
   mapInstance.invalidateSize();
+  runMapSearch();
   if (navigator.geolocation) {
     navigator.geolocation.getCurrentPosition((position) => {
       L.marker([position.coords.latitude, position.coords.longitude]).addTo(mapInstance).bindPopup("現在地");
