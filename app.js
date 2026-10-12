@@ -283,7 +283,7 @@ function loadMapSpots() {
   const center = mapInstance.getCenter();
   mapStatus = "Wikipediaからスポットを検索中…";
   refreshMapView();
-  fetchWikipediaSpots(center.lat, center.lng, radiusM, mapFetchJson).then(
+  fetchWikipediaSpots(center.lat, center.lng, radiusM, mapFetchJson, new Date().getFullYear()).then(
     (spots) => {
       if (seq !== mapSearchSeq) return;
       rememberDynamicSpots(spots);
@@ -304,7 +304,7 @@ function renderMap() {
   tileFallbackTriggered = false;
   showScreen("screen-map");
   const container = document.getElementById("map-content");
-  const tags = allTagsUsed().filter((tag) => tag !== "その他").concat("その他");
+  const tags = allTagsUsed();
   container.innerHTML =
     '<div id="map-tag-filter">' + tagCheckboxesHtml(tags, tags) + "</div>" +
     '<button class="research-button" id="map-research">このエリアを再読み込み</button>' +
@@ -328,7 +328,8 @@ function renderMap() {
     mapInstance.remove();
     mapInstance = null;
   }
-  mapInstance = L.map("leaflet-map").setView([35.0, 135.7], 9);
+  // 現在地が取れるまでの仮の表示。現在地が取れたら2km四方に切り替える。
+  mapInstance = L.map("leaflet-map", { zoomSnap: 0.25 }).setView([35.0, 135.7], 9);
   const tileLayer = L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
     maxZoom: 18,
     attribution: "&copy; OpenStreetMap contributors",
@@ -339,18 +340,31 @@ function renderMap() {
   tileLayer.addTo(mapInstance);
   mapInstance.invalidateSize();
   mapDynamicSpots = [];
-  mapStatus = "";
-  loadMapSpots();
-  // 初期表示の移動で二重に検索しないよう、ここから先の移動だけを監視する。
+  mapStatus = "現在地を取得しています…";
+  refreshMapView();
   mapInstance.on("moveend", () => {
     clearTimeout(mapMoveTimer);
     mapMoveTimer = setTimeout(loadMapSpots, 600);
   });
-  if (navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition((position) => {
-      L.marker([position.coords.latitude, position.coords.longitude]).addTo(mapInstance).bindPopup("現在地");
-    });
+  const locationFailed = () => {
+    if (!mapInstance) return;
+    mapStatus = "現在地を取得できませんでした。地図を拡大すると、そのあたりのスポットを検索します。";
+    refreshMapView();
+  };
+  if (!navigator.geolocation) {
+    locationFailed();
+    return;
   }
+  navigator.geolocation.getCurrentPosition((position) => {
+    if (!mapInstance) return;
+    const lat = position.coords.latitude;
+    const lng = position.coords.longitude;
+    L.marker([lat, lng]).addTo(mapInstance).bindPopup("現在地");
+    const b = squareBounds(lat, lng, 2000);
+    mapInstance.fitBounds([[b.south, b.west], [b.north, b.east]], { animate: false });
+    clearTimeout(mapMoveTimer);
+    loadMapSpots();
+  }, locationFailed, { timeout: 10000 });
 }
 
 document.getElementById("btn-map").addEventListener("click", renderMap);

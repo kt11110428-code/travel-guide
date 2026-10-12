@@ -85,6 +85,14 @@ function searchSpotsInArea(spots, bounds, checkedTags) {
   );
 }
 
+// 現在地などを中心にした一辺 sideMeters の正方形の範囲。
+function squareBounds(lat, lng, sideMeters) {
+  const halfKm = sideMeters / 2000;
+  const dLat = (halfKm / 6371) * (180 / Math.PI);
+  const dLng = dLat / Math.cos((lat * Math.PI) / 180);
+  return { south: lat - dLat, north: lat + dLat, west: lng - dLng, east: lng + dLng };
+}
+
 // ---- Wikipedia 位置情報検索（地図を動かしたときの動的スポット） ----
 
 const WIKIPEDIA_API = "https://ja.wikipedia.org/w/api.php";
@@ -96,7 +104,7 @@ function wikipediaGeosearchUrl(lat, lng, radiusM) {
     WIKIPEDIA_API + "?action=query&format=json&origin=*&generator=geosearch" +
     "&ggscoord=" + encodeURIComponent(lat + "|" + lng) +
     "&ggsradius=" + radiusM + "&ggslimit=50" +
-    "&prop=coordinates%7Cextracts&exintro=1&explaintext=1&exlimit=max&colimit=max"
+    "&prop=coordinates%7Cinfo%7Cextracts&exintro=1&explaintext=1&exlimit=max&colimit=max"
   );
 }
 
@@ -121,17 +129,25 @@ function stripTitleQualifier(title) {
 }
 
 const WIKIPEDIA_EXCLUDED_TITLE =
-  /(駅|停留場|停留所|学校|高校|幼稚園|保育園|大学|郵便局|交番|警察署|消防署|インターチェンジ|ジャンクション|変電所|病院|町|村|丁目|大字|支店|営業所|会社|ホテル|旅館|鉄道|電鉄|バス)$/;
+  /(駅|停留場|停留所|学校|高校|幼稚園|保育園|大学|郵便局|交番|警察署|警察|消防署|裁判所|検察庁|インターチェンジ|ジャンクション|変電所|病院|県|市|町|村|丁目|大字|支店|営業所|会社|協会|本部|ホテル|旅館|鉄道|電鉄|バス|高速道路|自動車道|道路|バイパス|線|大橋|高架橋|陸橋|事故|事件)$|^(国道|県道|府道|都道)/;
 
 function isExcludedWikipediaTitle(title) {
   return WIKIPEDIA_EXCLUDED_TITLE.test(stripTitleQualifier(title));
 }
 
+// 地理・歴史・文化と関係のない施設を、冒頭の一文の語から除く。
+const WIKIPEDIA_EXCLUDED_INTRO =
+  /高速道路|自動車道|国道|県道|鉄道路線|路線|インターチェンジ|ジャンクション|商業施設|ショッピング|会社|企業/;
+
+function isExcludedWikipediaIntro(extract) {
+  return WIKIPEDIA_EXCLUDED_INTRO.test((extract || "").split("。")[0]);
+}
+
 // 説明文は誤判定しやすい（寺の「山号」など）ため、タイトルの語と、種別を表す複合語だけを手掛かりにする。
 const WIKIPEDIA_TAG_RULES = [
-  ["歴史", /(寺|神社|大社|神宮|城|古墳|遺跡|史跡|陣屋|関所|墓|塔|院|堂|屋敷|藩|跡)$/, /(寺院|神社|城跡|城郭|古墳|遺跡|史跡|の墓)/],
+  ["歴史", /(寺|神社|大社|神宮|城|古墳|遺跡|史跡|陣屋|関所|墓|塔|院|堂|殿|屋敷|藩|跡)$/, /(寺院|神社|城跡|城郭|古墳|遺跡|史跡|の墓)/],
   ["地理", /(川|峠|盆地|平野|半島|岬|湾|港|橋|断層|台地|洲|谷)$/, /(河川|盆地|平野|半島|地形|峠|湾|断層|山地|山系)/],
-  ["文化", /(美術館|博物館|資料館|記念館|劇場|図書館|祭|工芸|文化財)$/, /(美術館|博物館|劇場|文化財|伝統工芸)/],
+  ["文化", /(美術館|博物館|資料館|記念館|劇場|図書館|祭|工芸|文化財|像)$/, /(美術館|博物館|劇場|文化財|伝統工芸)/],
   ["自然", /(山|岳|峰|渓|滝|湖|池|島|海岸|浜|公園|森|庭園)$/, /(山岳|火山|湖沼|滝|渓谷|公園|庭園)/],
 ];
 
@@ -141,7 +157,7 @@ function inferWikipediaTags(title, extract) {
   const tags = WIKIPEDIA_TAG_RULES
     .filter((rule) => rule[1].test(name) || rule[2].test(firstSentence))
     .map((rule) => rule[0]);
-  return tags.length > 0 ? tags : ["その他"];
+  return tags;
 }
 
 function parseGeosearchPages(json) {
@@ -155,6 +171,7 @@ function parseGeosearchPages(json) {
       lat: page.coordinates[0].lat,
       lng: page.coordinates[0].lon,
       extract: page.extract || "",
+      length: page.length || 0,
     }));
 }
 
@@ -184,14 +201,53 @@ function introOf(text, maxLength) {
   return result;
 }
 
-function wikipediaSpotFromPage(page) {
-  if (isExcludedWikipediaTitle(page.title)) return null;
+// 子供向けの一言。説明文に書かれている事実（指定・創建年）だけから作り、根拠がなければ空文字。
+const KIDS_NOTE_DESIGNATIONS = [
+  ["世界遺産", "世界遺産（せかいいさん）に登録されている、世界中の人が守りたい大切な場所だよ。"],
+  ["特別史跡", "昔のことを伝える「特別史跡」として、国がとくに大切に守っている場所だよ。"],
+  ["国宝", "「国宝」に関わる、日本を代表する大切な場所だよ。"],
+  ["重要文化財", "国が「重要文化財」として大切に守っているものがある場所だよ。"],
+  ["史跡", "昔のことを伝える「史跡」として、国が守っている場所だよ。"],
+  ["名勝", "景色がすばらしいと国に認められた「名勝」だよ。"],
+  ["天然記念物", "めずらしい自然として、国が守っている「天然記念物」だよ。"],
+];
+const KIDS_NOTE_FOUNDING =
+  /(\d{3,4})年[^。]{0,30}(?:創建|開創|創立|建立|築城|開基|開山|築造|造営|建造)|(?:創建|開創|建立|築城|開基|開山|創祀)[^。]{0,15}?(\d{3,4})年/;
+const KIDS_NOTE_LONG_ARTICLE = "多くの人に知られている有名な場所だよ。どんな場所か調べてみよう！";
+const WIKIPEDIA_NOTABLE_LENGTH = 12000; // 記事がこの長さ以上なら、有名な場所として扱う
+
+function kidsNoteFromExtract(extract, nowYear) {
+  const text = extract || "";
+  const parts = [];
+  const designation = KIDS_NOTE_DESIGNATIONS.find((entry) => text.indexOf(entry[0]) !== -1);
+  if (designation) parts.push(designation[1]);
+  const founding = KIDS_NOTE_FOUNDING.exec(text);
+  if (founding) {
+    const year = Number(founding[1] || founding[2]);
+    if (year >= 300 && year <= nowYear) {
+      parts.push("約" + (nowYear - year) + "年前（" + year + "年）に作られたよ。");
+    }
+  }
+  return parts.join("");
+}
+
+// 子供にコメントできるほど重要なスポットだけを返す（除外対象・ジャンル不明・根拠のないものはnull）。
+function wikipediaSpotFromPage(page, nowYear) {
+  if (isExcludedWikipediaTitle(page.title) || isExcludedWikipediaIntro(page.extract)) return null;
+  const tags = inferWikipediaTags(page.title, page.extract);
+  if (tags.length === 0) return null;
+  let kidsNote = kidsNoteFromExtract(page.extract, nowYear);
+  if (kidsNote === "" && (page.length || 0) >= WIKIPEDIA_NOTABLE_LENGTH && page.extract) {
+    kidsNote = KIDS_NOTE_LONG_ARTICLE;
+  }
+  if (kidsNote === "") return null;
   return {
     id: "wp-" + page.pageId,
     name: stripTitleQualifier(page.title),
     lat: page.lat,
     lng: page.lng,
-    tags: inferWikipediaTags(page.title, page.extract),
+    tags: tags,
+    kidsNote: kidsNote,
     summary: firstSentenceOf(page.extract, 90),
     description: introOf(page.extract, 600),
     source: "wikipedia",
@@ -199,7 +255,7 @@ function wikipediaSpotFromPage(page) {
   };
 }
 
-function fetchWikipediaSpots(lat, lng, radiusM, fetchJson) {
+function fetchWikipediaSpots(lat, lng, radiusM, fetchJson, nowYear) {
   return fetchJson(wikipediaGeosearchUrl(lat, lng, radiusM)).then((json) => {
     const pages = parseGeosearchPages(json);
     const missingIds = pages.filter((p) => p.extract === "").map((p) => p.pageId);
@@ -213,7 +269,7 @@ function fetchWikipediaSpots(lat, lng, radiusM, fetchJson) {
     )).then((extractMaps) => {
       const extracts = Object.assign({}, ...extractMaps);
       pages.forEach((p) => { if (extracts[p.pageId]) p.extract = extracts[p.pageId]; });
-      return pages.map(wikipediaSpotFromPage).filter((spot) => spot !== null);
+      return pages.map((p) => wikipediaSpotFromPage(p, nowYear)).filter((spot) => spot !== null);
     });
   });
 }
